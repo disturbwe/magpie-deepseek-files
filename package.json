@@ -1,0 +1,14 @@
+{
+  "name": "magpie-deepseek-files",
+  "version": "0.1.0",
+  "description": "Native Magpie provider plugin: lossless DeepSeek image uploads and cached file references.",
+  "type": "module",
+  "main": "./index.mjs",
+  "exports": "./index.mjs",
+  "files": ["index.mjs", "src/", "README.md", "LICENSE"],
+  "scripts": {"test": "node --test test/*.test.mjs", "check": "node --check index.mjs && node --check src/bridge.mjs && node --check src/cache.mjs", "smoke": "node scripts/smoke.mjs"},
+  "engines": {"node": ">=20"},
+  "keywords": ["magpie", "magpie-plugin", "opencode-plugin", "deepseek", "files-api"],
+  "license": "MIT",
+  "repository": {"type": "git", "url": "git+https://github.com/disturbwe/magpie-deepseek-files.git"}
+}
