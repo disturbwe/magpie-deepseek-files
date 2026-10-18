@@ -1,7 +1,7 @@
 {
   "name": "magpie-deepseek-files",
-  "version": "0.3.0",
-  "description": "Native Magpie provider plugin: lossless DeepSeek image uploads and cached file references.",
+  "version": "0.4.0",
+  "description": "Native Magpie provider plugin: DeepSeek file references and adaptive image budgeting.",
   "type": "module",
   "main": "./index.mjs",
   "exports": "./index.mjs",
@@ -14,12 +14,12 @@
     "docs/"
   ],
   "scripts": {
-    "test": "node --test test/bridge.test.mjs",
-    "check": "node --check index.mjs && node --check src/bridge.mjs && node --check src/cache.mjs && node --check src/paths.mjs && node --check src/models.mjs && node --check src/catalog.mjs && node --check src/compat.mjs",
+    "test": "node --test test/bridge.test.mjs test/image-budget.test.mjs",
+    "check": "node --check index.mjs && node --check src/bridge.mjs && node --check src/image-budget.mjs && node --check src/cache.mjs && node --check src/paths.mjs && node --check src/models.mjs && node --check src/catalog.mjs && node --check src/compat.mjs",
     "smoke": "node scripts/smoke.mjs"
   },
   "engines": {
-    "node": ">=20.3.0"
+    "node": ">=20.9.0"
   },
   "keywords": [
     "magpie",
@@ -35,5 +35,8 @@
   },
   "magpie": {
     "icon": "https://raw.githubusercontent.com/disturbwe/magpie-deepseek-files/main/assets/deepseek.svg"
+  },
+  "dependencies": {
+    "sharp": "0.35.5"
   }
 }

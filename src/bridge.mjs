@@ -1,5 +1,6 @@
 import { FileCache, Semaphore, sha256 } from "./cache.mjs";
 import { fitDeepSeekRequest } from "./compat.mjs";
+import { IMAGE_BUDGET, ImageBudgetError, planImages } from "./image-budget.mjs";
 
 export const API = "https://api.deepseek.com";
 export const MIB = 1024 * 1024;
@@ -11,6 +12,11 @@ export class BridgeError extends Error {
   constructor(message, status = 502) { super(message); this.status = status; }
 }
 const failure = error => Response.json({ error: { type: "deepseek_files_bridge_error", message: error.message } }, { status: error.status ?? 502 });
+function omitImage({ part, kind }) {
+  for (const key of Object.keys(part)) delete part[key];
+  part.type = kind === "responses" ? "input_text" : "text";
+  part.text = "[Earlier image omitted from this request to fit DeepSeek image limits; original retained in local history.]";
+}
 
 function abortable(promise, signal) {
   signal?.throwIfAborted();
@@ -40,7 +46,7 @@ export function imageParts(body, path) {
       if (!item || typeof item !== "object") continue;
       const content = ["function_call_output", "custom_tool_call_output"].includes(item.type) ? item.output : item.content;
       if (!Array.isArray(content)) continue;
-      for (const part of content) if (part?.type === "input_image" && typeof part.image_url === "string")
+      for (const part of content) if (part?.type === "input_image" && (typeof part.image_url === "string" || typeof part.file_id === "string"))
         parts.push({ part, url: part.image_url, kind: "responses" });
     }
   } else if (path === "/chat/completions" && Array.isArray(body.messages)) {
@@ -48,6 +54,7 @@ export function imageParts(body, path) {
       for (const part of item.content) {
         if (part?.type === "image_url" && typeof part.image_url?.url === "string") parts.push({ part, url: part.image_url.url, kind: "chat" });
         else if (part?.type === "file" && typeof part.file_data === "string") parts.push({ part, url: part.file_data, kind: "chat" });
+        else if (part?.type === "file" && typeof part.file_id === "string") parts.push({ part, kind: "chat" });
       }
     }
   }
@@ -60,7 +67,7 @@ export function staleFileError(status, error) {
   return /file[_ -]?(?:id|api)|uploaded file/.test(text) && /expired|not found|not_found|does not exist|invalid file|deleted/.test(text);
 }
 
-export function createBridge({ getAuth, cacheDir, fetchImpl = globalThis.fetch, now = Date.now, onMetric = () => {}, ttlSeconds = 604800, uploadTimeoutMs = 120000 }) {
+export function createBridge({ getAuth, cacheDir, fetchImpl = globalThis.fetch, now = Date.now, onMetric = () => {}, ttlSeconds = 604800, uploadTimeoutMs = 120000, imageBudgetBytes = IMAGE_BUDGET }) {
   const cache = new FileCache(cacheDir, { now });
   if (!Number.isInteger(ttlSeconds) || ttlSeconds < 3600 || ttlSeconds > 2592000) throw new Error("File lifetime must be 1 hour to 30 days");
 
@@ -76,11 +83,14 @@ export function createBridge({ getAuth, cacheDir, fetchImpl = globalThis.fetch, 
       pending.promise = uploads.run(async () => {
         const hit = await cache.get(scope, image.digest);
         if (hit) return hit.id;
+        const encoded = image.raw ? image : await image.materialize?.(controller.signal);
+        const raw = encoded?.raw, mime = encoded?.mime;
+        if (!raw) throw new BridgeError("Cannot reconstruct a budgeted image; no images were removed.");
         const form = new FormData();
         form.set("purpose", "user_data");
         form.set("expires_after[anchor]", "created_at");
         form.set("expires_after[seconds]", String(ttlSeconds));
-        form.set("file", new Blob([image.raw], { type: image.mime }), `${image.digest.slice(0, 24)}.${MIME[image.mime]}`);
+        form.set("file", new Blob([raw], { type: mime }), `${image.digest.slice(0, 24)}.${MIME[mime]}`);
         const uploadSignal = AbortSignal.any([controller.signal, AbortSignal.timeout(uploadTimeoutMs)]);
         const response = await fetchImpl(`${API}/files`, { method: "POST", headers: { authorization: `Bearer ${key}` }, body: form, signal: uploadSignal, redirect: "error" });
         if (!response.ok) {
@@ -92,8 +102,8 @@ export function createBridge({ getAuth, cacheDir, fetchImpl = globalThis.fetch, 
         if (!/^file-api-[A-Za-z0-9_-]+$/.test(data?.id)) throw new BridgeError("DeepSeek Files returned an invalid file ID.");
         const expiresAt = Math.min(Number(data.expires_at ?? now()/1000+ttlSeconds)*1000, now()+ttlSeconds*1000);
         if (!Number.isFinite(expiresAt) || expiresAt <= now()+120000) throw new BridgeError("DeepSeek Files returned an invalid expiration.");
-        await cache.put(scope, image.digest, { id: data.id, expiresAt, bytes: image.raw.length });
-        onMetric({ event: "uploaded", bytes: image.raw.length });
+        await cache.put(scope, image.digest, { id: data.id, expiresAt, bytes: raw.length });
+        onMetric({ event: "uploaded", bytes: raw.length });
         return data.id;
       }, controller.signal).finally(() => { if (inFlight.get(identity) === pending) inFlight.delete(identity); });
       // A disconnected caller must not leave an unhandled rejection.
@@ -105,14 +115,28 @@ export function createBridge({ getAuth, cacheDir, fetchImpl = globalThis.fetch, 
     finally { if (--pending.users === 0) pending.controller.abort(); }
   }
 
-  async function transform(original, path, key, signal) {
+  async function transform(original, path, key, signal, budget = imageBudgetBytes, maxImages = 600) {
     let body;
     try { body = JSON.parse(original); } catch { throw new BridgeError("Expected a JSON request body.", 400); }
     if (!body || typeof body !== "object" || Array.isArray(body)) throw new BridgeError("Expected a JSON object.", 400);
     const fitted = fitDeepSeekRequest(body, path);
-    const images = imageParts(body, path).map(item => ({ ...item, image: decodeImage(item.url) })).filter(item => item.image);
-    if (!images.length) return { payload: fitted ? JSON.stringify(body) : original, digests: [], scope: null };
+    const allParts = imageParts(body, path);
+    const countOmitted = allParts.slice(0, Math.max(0, allParts.length - maxImages));
+    countOmitted.forEach(omitImage);
+    const parts = allParts.slice(countOmitted.length);
+    const decoded = new Map();
+    let images = parts.map(item => {
+      if (typeof item.url !== "string") return { ...item, image: null };
+      if (!decoded.has(item.url)) decoded.set(item.url, decodeImage(item.url));
+      return { ...item, image: decoded.get(item.url) };
+    }).filter(item => item.image);
+    if (!images.length) return { payload: fitted || countOmitted.length ? JSON.stringify(body) : original, digests: [], scope: null, imageCount: parts.length, imageBytes: 0 };
     const scope = sha256(`${API}\0${key}`);
+    const plan = await planImages(images, { budget, cacheGet: async digest => await cache.get(scope, digest) ?? await cache.getSize(scope, digest), cachePut: (digest, bytes) => cache.putSize(scope, digest, bytes), signal, onMetric });
+    plan.omitted.forEach(omitImage);
+    const omitted = countOmitted.length + plan.omitted.length;
+    if (omitted) onMetric({ event: "images_omitted", count: omitted });
+    images = plan.images;
     const unique = [...new Map(images.map(item => [item.image.digest, item.image])).values()];
     const group = new AbortController();
     const groupSignal = signal ? AbortSignal.any([signal, group.signal]) : group.signal;
@@ -127,8 +151,8 @@ export function createBridge({ getAuth, cacheDir, fetchImpl = globalThis.fetch, 
     }
     const payload = JSON.stringify(body), size = Buffer.byteLength(payload);
     if (size >= 48 * MIB) throw new BridgeError("Text/tool history still exceeds DeepSeek's 48 MiB request limit after image references; compact the conversation.", 413);
-    onMetric({ event: "prepared", beforeBytes: Buffer.byteLength(original), afterBytes: size, images: images.length, uniqueImages: unique.length });
-    return { payload, digests: unique.map(x => x.digest), scope };
+    onMetric({ event: "prepared", beforeBytes: Buffer.byteLength(original), afterBytes: size, images: images.length, uniqueImages: unique.length, imageBytes: plan.bytes });
+    return { payload, digests: unique.map(x => x.digest), scope, imageBytes: plan.bytes, imageCount: parts.length - plan.omitted.length };
   }
 
   return async function bridgeFetch(input, init = {}) {
@@ -150,17 +174,27 @@ export function createBridge({ getAuth, cacheDir, fetchImpl = globalThis.fetch, 
     try {
       let converted = original !== undefined && ["/responses", "/chat/completions"].includes(path)
         ? await transform(original, path, auth.key, signal) : { payload: original, digests: [] };
-      for (let attempt = 0; attempt < 2; attempt++) {
+      let staleRetried = false, budgetRetried = false, retryMaxImages = 600;
+      for (let attempt = 0; attempt < 3; attempt++) {
         signal?.throwIfAborted();
         const response = await fetchImpl(`${API}${path}${url.search}`, { ...init, method, headers, body: converted.payload, signal, redirect: "error" });
-        if (attempt === 0 && converted.digests.length && [400, 404, 410, 422].includes(response.status)) {
+        if ([400, 404, 410, 422].includes(response.status)) {
           let error;
           try { error = await response.clone().json(); } catch {}
-          if (staleFileError(response.status, error)) {
+          if (!staleRetried && converted.digests.length && staleFileError(response.status, error)) {
+            staleRetried = true;
             await response.body?.cancel();
             await Promise.all(converted.digests.map(digest => cache.remove(converted.scope, digest)));
             onMetric({ event: "refresh_stale", files: converted.digests.length });
-            converted = await transform(original, path, auth.key, signal);
+            converted = await transform(original, path, auth.key, signal, budgetRetried ? Math.floor(imageBudgetBytes * 0.75) : imageBudgetBytes, retryMaxImages);
+            continue;
+          }
+          if (!budgetRetried && converted.imageCount > 1 && /total image size exceeds/i.test(error?.error?.message ?? "")) {
+            budgetRetried = true;
+            retryMaxImages = Math.max(1, Math.floor(converted.imageCount * 0.75));
+            await response.body?.cancel();
+            onMetric({ event: "retry_image_budget" });
+            converted = await transform(original, path, auth.key, signal, Math.floor(imageBudgetBytes * 0.75), retryMaxImages);
             continue;
           }
         }
@@ -170,6 +204,7 @@ export function createBridge({ getAuth, cacheDir, fetchImpl = globalThis.fetch, 
     } catch (error) {
       signal?.throwIfAborted();
       if (error instanceof BridgeError) return failure(error);
+      if (error instanceof ImageBudgetError) return failure(new BridgeError(error.message, 413));
       return failure(new BridgeError("DeepSeek file preparation failed or timed out; original images were retained. Check network/cache permissions."));
     }
   };

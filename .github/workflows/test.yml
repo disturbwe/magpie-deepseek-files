@@ -15,6 +15,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
+      - run: npm ci
       - run: npm test
       - run: npm run check
   bun:
@@ -24,4 +25,5 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-      - run: bun test test/bridge.test.mjs
+      - run: bun install
+      - run: bun test test/bridge.test.mjs test/image-budget.test.mjs

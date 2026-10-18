@@ -29,6 +29,23 @@ export class FileCache {
       await rename(temp, target);
     } finally { await unlink(temp).catch(() => {}); }
   }
+  async getSize(scope, digest) {
+    try {
+      const entry = JSON.parse(await readFile(this.path(scope, digest).replace(/\.json$/, ".size.json"), "utf8"));
+      return Number.isSafeInteger(entry.bytes) && entry.bytes > 0 && entry.expiresAt > this.now() ? entry : null;
+    } catch (error) {
+      if (["ENOENT", "ENOTDIR"].includes(error.code) || error instanceof SyntaxError) return null;
+      throw new Error("Cannot read DeepSeek transform metadata cache");
+    }
+  }
+  async putSize(scope, digest, bytes) {
+    const target = this.path(scope, digest).replace(/\.json$/, ".size.json"), temp = `${target}.${randomUUID()}.tmp`;
+    await mkdir(join(this.root, scope), { recursive: true, mode: 0o700 });
+    try {
+      await writeFile(temp, JSON.stringify({ bytes, expiresAt: this.now() + 604800000 }), { mode: 0o600, flag: "wx" });
+      await rename(temp, target);
+    } finally { await unlink(temp).catch(() => {}); }
+  }
   async remove(scope, digest) { await unlink(this.path(scope, digest)).catch(e => { if (e.code !== "ENOENT") throw e; }); }
 }
 
