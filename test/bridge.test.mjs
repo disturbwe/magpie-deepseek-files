@@ -204,6 +204,8 @@ test("native plugin advertises Responses and imports only an official configured
   const s = await setup(t), hooks = await DeepSeekFilesPlugin(), config = {};
   await hooks.config(config);
   assert.equal(hooks.auth.provider, "deepseek-files");
+  assert.match(hooks.auth.icon, /^data:image\/svg\+xml;base64,/);
+  assert.match(Buffer.from(hooks.auth.icon.split(",")[1], "base64").toString(), /<title>DeepSeek<\/title>/);
   assert.equal(config.provider["deepseek-files"].npm, "@ai-sdk/openai");
   assert.ok(config.provider["deepseek-files"].models["deepseek-flash"].modalities.input.includes("image"));
   await writeFile(join(s.directory, "providers.json"), JSON.stringify({ providers: [{ id: "deepseek", key: "local-key", responses: "https://api.deepseek.com/v1" }] }));

@@ -112,3 +112,7 @@ magpie plugin rm magpie-deepseek-files
 ## English
 
 A native Magpie/OpenCode provider plugin that replaces inline DeepSeek images with cached Files API references. Originals are uploaded unchanged, scoped per credential, and expire after seven days. It preserves text, tool pairs, streaming, cancellation and local conversation history. Select `deepseek-files/deepseek-flash` after installing and signing in. No standalone proxy, binary patch, runtime dependency, or image eviction is required.
+
+## 图标来源
+
+DeepSeek 品牌图标来自 [Lobe Icons](https://github.com/lobehub/lobe-icons)，使用其 MIT 许可。插件随包提供 SVG，提供商图标无需联网加载。

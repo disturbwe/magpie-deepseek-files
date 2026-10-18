@@ -1,12 +1,15 @@
 import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { createBridge, API } from "./src/bridge.mjs";
 import { configDirectory, importMagpieKey } from "./src/paths.mjs";
 
 export const PROVIDER_ID = "deepseek-files";
+const icon = "data:image/svg+xml;base64," + readFileSync(new URL("./assets/deepseek.svg", import.meta.url)).toString("base64");
 export async function DeepSeekFilesPlugin() {
   return {
     auth: {
       provider: PROVIDER_ID,
+      icon,
       methods: [
         { type: "api", label: "DeepSeek API key", placeholder: "sk-…" },
         { type: "oauth", label: "Import existing Magpie DeepSeek API key", async authorize() {
