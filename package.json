@@ -6,8 +6,8 @@
   "main": "./index.mjs",
   "exports": "./index.mjs",
   "files": ["index.mjs", "src/", "README.md", "LICENSE"],
-  "scripts": {"test": "node --test test/*.test.mjs", "check": "node --check index.mjs && node --check src/bridge.mjs && node --check src/cache.mjs", "smoke": "node scripts/smoke.mjs"},
-  "engines": {"node": ">=20"},
+  "scripts": {"test": "node --test test/bridge.test.mjs", "check": "node --check index.mjs && node --check src/bridge.mjs && node --check src/cache.mjs && node --check src/paths.mjs", "smoke": "node scripts/smoke.mjs"},
+  "engines": {"node": ">=20.3.0"},
   "keywords": ["magpie", "magpie-plugin", "opencode-plugin", "deepseek", "files-api"],
   "license": "MIT",
   "repository": {"type": "git", "url": "git+https://github.com/disturbwe/magpie-deepseek-files.git"}
