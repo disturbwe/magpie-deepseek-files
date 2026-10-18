@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { createBridge, API } from "./src/bridge.mjs";
 import { configDirectory, importMagpieKey } from "./src/paths.mjs";
+import { DEFAULT_MODELS, discoverModels, readBalance } from "./src/models.mjs";
 
 export const PROVIDER_ID = "deepseek-files";
 const icon = "data:image/svg+xml;base64," + readFileSync(new URL("./assets/deepseek.svg", import.meta.url)).toString("base64");
@@ -10,6 +11,7 @@ export async function DeepSeekFilesPlugin() {
     auth: {
       provider: PROVIDER_ID,
       icon,
+      async usage(getAuth) { return readBalance(getAuth); },
       methods: [
         { type: "api", label: "DeepSeek API key", placeholder: "sk-…" },
         { type: "oauth", label: "Import existing Magpie DeepSeek API key", async authorize() {
@@ -25,17 +27,13 @@ export async function DeepSeekFilesPlugin() {
           fetch: createBridge({ getAuth, cacheDir: process.env.DEEPSEEK_FILES_CACHE_DIR || join(configDirectory(), "deepseek-files-cache") }) };
       },
     },
+    provider: { id: PROVIDER_ID, models: discoverModels },
     async config(config) {
       config.provider ??= {};
       const previous = config.provider[PROVIDER_ID] ?? {};
       config.provider[PROVIDER_ID] = {
         ...previous, name: "DeepSeek Files Bridge", npm: "@ai-sdk/openai", api: `${API}/v1`,
-        models: { ...previous.models,
-          "deepseek-flash": { name: "DeepSeek Flash · Files Bridge", attachment: true, reasoning: true, tool_call: true,
-            modalities: { input: ["text", "image"], output: ["text"] },
-            limit: { context: 1000000, output: 393216 },
-            cost: { input: 0.3, output: 1.2, cache_read: 0.006 } },
-        },
+        models: { ...structuredClone(DEFAULT_MODELS), ...previous.models },
       };
     },
   };

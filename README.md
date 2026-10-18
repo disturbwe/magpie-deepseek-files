@@ -26,6 +26,20 @@ deepseek-files/deepseek-flash
 
 **只有选择这个提供商才会启用文件适配。** 继续选择 `deepseek/deepseek-flash`，或路由组中仍指向原提供商的成员，仍使用原来的发送路径。需要时将相应组成员改成 `deepseek-files/deepseek-flash`。
 
+## 官方模型列表与余额
+
+从 **0.2.0** 起，登录后通过 `GET https://api.deepseek.com/models` 获取该 key 可用的全部官方模型。“重新获取模型”及以下命令都会重新询问官方接口：
+
+```sh
+magpie provider refresh deepseek-files
+```
+
+模型名、准确的上下文窗口、最大输出、输入/输出模态和推理档位使用官方返回值；新模型无需升级插件即可出现在供应商列表中，用户的已选模型仍由 Magpie 管理。官方下架的 ID 不会被静态列表加回来。接口失败时由 Magpie 保留上次成功的列表并显示获取失败，401/403 会标记登录失效。
+
+当前官方列表包含 `deepseek-flash` 和 `deepseek-v4-pro`。Flash 支持图片，V4 Pro 是纯文本模型，插件不会把后者标成支持视觉。两者都经过原生插件传输；只有请求含内联图片时才会调用 Files API。
+
+余额通过官方 `/user/balance` 查询，显示在 Magpie 的用量/余额区域。未登录时只显示离线启动用的模型快照，不会请求官方接口。
+
 开发安装也支持本地路径：
 
 ```sh
@@ -68,13 +82,15 @@ magpie plugin add ./magpie-deepseek-files
 
 DeepSeek 当前文档规定：请求体最多 48 MiB，单个上传文件最多 64 MiB，单次最多 600 张图，包含文件引用时图片总大小最多 200 MiB。若文字或工具输出本身过大，仍需要压缩会话。这里没有通过删图规避这些限制。
 
-初版只发布具有视觉能力的 `deepseek-flash` 模型。模型元数据中的价格是 2026-10-18 官方峰时价格快照，用于估计；以 DeepSeek 实际账单为准。
+模型列表以官方接口为准。该接口不提供价格；Flash 和 V4 Pro 的估算价格使用 2026-10-18 官方峰时价格快照，新模型不会套用 Flash 的价格。实际费用以 DeepSeek 账单为准。
 
 官方参考：
 
 - [DeepSeek Files API](https://api-docs.deepseek.com/guides/files_api/)
 - [DeepSeek Vision](https://api-docs.deepseek.com/guides/vision/)
 - [DeepSeek Responses API](https://api-docs.deepseek.com/api/create-response/)
+- [DeepSeek Models API](https://api-docs.deepseek.com/api/list-models/)
+- [DeepSeek Models & Pricing](https://api-docs.deepseek.com/quick_start/pricing/)
 - [Magpie 插件机制](https://github.com/yetone/magpie/blob/main/docs/reference.md#plugins)
 
 ## 验证

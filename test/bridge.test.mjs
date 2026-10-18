@@ -7,6 +7,7 @@ import { createBridge, MIB } from "../src/bridge.mjs";
 import { FileCache, sha256 } from "../src/cache.mjs";
 import { DeepSeekFilesPlugin } from "../index.mjs";
 import { importMagpieKey } from "../src/paths.mjs";
+import { discoverModels, readBalance } from "../src/models.mjs";
 
 const URL = "https://api.deepseek.com/v1/responses";
 const url = bytes => `data:image/png;base64,${Buffer.from(bytes).toString("base64")}`;
@@ -224,4 +225,89 @@ test("cache identity does not allow path traversal", async t => {
 test("entry exports exactly one callable plugin for Magpie's loader", async () => {
   const entry = await import("../index.mjs");
   assert.deepEqual(Object.entries(entry).filter(([,value]) => typeof value === "function").map(([name])=>name), ["DeepSeekFilesPlugin"]);
+});
+
+const discoveryProvider = () => ({ id: "deepseek-files", api: "https://api.deepseek.com/v1", npm: "@ai-sdk/openai",
+  models: { removed: { name: "Old model" }, "deepseek-flash": { limit: { context: 1000000 }, cost: { input: 0.3, output: 1.2 } } } });
+const discoveryAuth = { auth: { type: "api", key: "private-discovery-key" } };
+
+test("model hook lists every official ID, removes disappeared IDs and maps exact metadata", async () => {
+  const hooks = await DeepSeekFilesPlugin();
+  assert.equal(hooks.provider.id, "deepseek-files");
+  assert.equal(hooks.provider.models, discoverModels);
+  const models = await discoverModels(discoveryProvider(), discoveryAuth, async (url, init) => {
+    assert.equal(url, "https://api.deepseek.com/models");
+    assert.equal(init.headers.authorization, "Bearer private-discovery-key");
+    assert.equal(init.redirect, "error");
+    assert.ok(init.signal);
+    return Response.json({ data: [
+      { id: "deepseek-flash", name: "Official Flash", context_window: 1048576, max_output_tokens: 393216,
+        input_modalities: ["text", "image"], output_modalities: ["text"], effort: { supported_levels: ["low", "high", "max"] } },
+      { id: "deepseek-v4-pro", name: "Official Pro", context_window: 1048576, max_output_tokens: 393216,
+        input_modalities: ["text"], effort: { supported_levels: ["low", "high", "max"] } },
+      { id: "future-model", name: "Future", context_window: 2000000, max_output_tokens: 99999,
+        input_modalities: ["text", "image"], effort: { supported_levels: ["medium", "ultra"] } },
+    ] });
+  });
+  assert.deepEqual(Object.keys(models), ["deepseek-flash", "deepseek-v4-pro", "future-model"]);
+  assert.equal(models["deepseek-flash"].limit.context, 1048576);
+  assert.equal(models["deepseek-flash"].limit.output, 393216);
+  assert.equal(models["deepseek-flash"].name, "Official Flash");
+  assert.equal(models["deepseek-flash"].capabilities.input.image, true);
+  assert.equal(models["deepseek-v4-pro"].capabilities.input.image, false);
+  assert.equal(models["deepseek-v4-pro"].capabilities.attachment, false);
+  assert.equal(models["deepseek-v4-pro"].cost.output, 3.96);
+  assert.deepEqual(Object.keys(models["deepseek-flash"].variants), ["none", "low", "high", "max"]);
+  assert.deepEqual(Object.keys(models["future-model"].variants), ["none", "medium", "ultra"]);
+  assert.equal(models["future-model"].cost, undefined);
+  assert.equal(models["future-model"].api.npm, "@ai-sdk/openai");
+});
+
+test("signed-out discovery uses offline bootstrap without any network call", async () => {
+  const provider = discoveryProvider();
+  assert.equal(await discoverModels(provider, {}, () => { throw new Error("must not fetch"); }), provider.models);
+  const config = {};
+  await (await DeepSeekFilesPlugin()).config(config);
+  assert.deepEqual(Object.keys(config.provider["deepseek-files"].models), ["deepseek-flash", "deepseek-v4-pro"]);
+  assert.equal(config.provider["deepseek-files"].models["deepseek-v4-pro"].attachment, false);
+});
+
+test("discovery failures are explicit, sanitized, and do not mutate existing metadata", async () => {
+  for (const status of [401, 403, 429, 500]) {
+    const provider = discoveryProvider(), before = structuredClone(provider);
+    await assert.rejects(discoverModels(provider, discoveryAuth, async () => new Response("private-discovery-key", { status })), error => {
+      assert.ok(error.message.includes(String(status)));
+      assert.equal(error.message.includes("private-discovery-key"), false);
+      assert.equal(error.signIn, [401, 403].includes(status) ? "expired" : undefined);
+      return true;
+    });
+    assert.deepEqual(provider, before);
+  }
+  await assert.rejects(discoverModels(discoveryProvider(), discoveryAuth, () => { throw new Error("private-discovery-key"); }), /could not be reached/);
+});
+
+test("malformed discovery fails instead of presenting a partial or fabricated list", async () => {
+  for (const data of [{}, { data: [{}] }, { data: [{ id: "future", input_modalities: "image" }] }, { data: [{ id: "future", effort: { supported_levels: [1] } }] }])
+    await assert.rejects(discoverModels(discoveryProvider(), discoveryAuth, async () => Response.json(data)), /invalid/);
+  assert.deepEqual(await discoverModels(discoveryProvider(), discoveryAuth, async () => Response.json({ data: [] })), {});
+});
+
+test("minimal model metadata does not invent vision or reasoning for new IDs", async () => {
+  const models = await discoverModels(discoveryProvider(), discoveryAuth, async () => Response.json({ data: [{ id: "unknown-new-model" }] }));
+  assert.equal(models["unknown-new-model"].capabilities.input.image, false);
+  assert.equal(models["unknown-new-model"].capabilities.reasoning, false);
+  assert.equal(models["unknown-new-model"].limit.context, 0);
+  assert.deepEqual(models["unknown-new-model"].variants, {});
+});
+
+test("usage hook reads the account's official multi-currency balance, including zero", async () => {
+  assert.equal(typeof (await DeepSeekFilesPlugin()).auth.usage, "function");
+  const result = await readBalance(async () => discoveryAuth.auth, async (url, init) => {
+    assert.equal(url, "https://api.deepseek.com/user/balance");
+    assert.equal(init.headers.authorization, "Bearer private-discovery-key");
+    return Response.json({ is_available: true, balance_infos: [{ currency: "CNY", total_balance: "12.30" }, { currency: "USD", total_balance: "0" }] });
+  });
+  assert.deepEqual(result, { balance: "¥12.30 · $0.00", signIn: "kept" });
+  await assert.rejects(readBalance(async () => discoveryAuth.auth, async () => Response.json({ balance_infos: [{ currency: "CNY", total_balance: "NaN" }] })), /invalid/);
+  await assert.rejects(readBalance(async () => null), /Sign in/);
 });
