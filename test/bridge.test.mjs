@@ -23,7 +23,7 @@ async function setup(t, handler, extra = {}) {
     fetchImpl: async (input, init) => {
       calls.push({ url: input, init });
       if (handler) { const result = await handler(input, init, calls); if (result) return result; }
-      if (input.endsWith("/files")) return Response.json({ id: `file-api-${++fileN}`, expires_at: Date.now()/1000+604800 });
+      if (input.endsWith("/files")) return Response.json({ id: `file-api-${++fileN}`, expires_at: (extra.now?.() ?? Date.now())/1000+604800 });
       return Response.json({ ok: true });
     }, ...extra });
   return { fetch, calls, metrics, directory, setAuth: value => { auth = value; }, uploads: () => calls.filter(x => x.url.endsWith("/files")), inference: () => calls.filter(x => !x.url.endsWith("/files")) };
@@ -80,9 +80,9 @@ test("API key changes cannot reuse another credential's file IDs", async t => {
 test("expired cached metadata is reuploaded before inference", async t => {
   let now = Date.now();
   const s = await setup(t, null, { now: () => now });
-  await request(s.fetch, body(image("expires")));
+  assert.equal((await request(s.fetch, body(image("expires")))).status, 200);
   now += 604800000;
-  await request(s.fetch, body(image("expires")));
+  assert.equal((await request(s.fetch, body(image("expires")))).status, 200);
   assert.equal(s.uploads().length, 2);
 });
 
@@ -209,6 +209,8 @@ test("native plugin advertises Responses and imports only an official configured
   await writeFile(join(s.directory, "providers.json"), JSON.stringify({ providers: [{ id: "deepseek", key: "local-key", responses: "https://api.deepseek.com/v1" }] }));
   assert.equal(await importMagpieKey(s.directory), "local-key");
   await writeFile(join(s.directory, "providers.json"), JSON.stringify({ providers: [{ id: "deepseek", key: "local-key", responses: "https://relay.example/v1" }] }));
+  await assert.rejects(importMagpieKey(s.directory), /official/);
+  await writeFile(join(s.directory, "providers.json"), JSON.stringify({ providers: [{ id: "deepseek", key: "local-key" }] }));
   await assert.rejects(importMagpieKey(s.directory), /official/);
 });
 
