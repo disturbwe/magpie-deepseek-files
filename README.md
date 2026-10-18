@@ -20,12 +20,6 @@ magpie plugin login deepseek-files
 1. **DeepSeek API key**：输入自己的官方 API key。
 2. **Import existing Magpie DeepSeek API key**：从本机 Magpie 的官方 `deepseek` 提供商导入现有 key，不显示 key、不修改原提供商。
 
-需要与内置提供商相同的账户/密钥管理链接和 maker 目录时，可补充这些 Magpie 提供商设置（不复制密钥）：
-
-```sh
-magpie provider set deepseek-files catalog=deepseek website=https://platform.deepseek.com keys=https://platform.deepseek.com/api_keys
-```
-
 然后在 Codex / Magpie 模型选择器中选择：
 
 ```text

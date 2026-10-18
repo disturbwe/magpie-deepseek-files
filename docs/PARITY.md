@@ -36,11 +36,7 @@ Magpie 当前 `pluginAPIs` 按每个模型的 AI SDK 包决定**一种上游协�
 
 插件通过 `auth.usage` 提供余额和赠送/充值明细。Magpie 的插件用量卡与内置 API key 卡是不同界面；其插件 RPC 不接收内置的 `balanceParts` 和余额趋势数据，不能仅靠本插件复制内置余额趋势图。赠送/充值数据已通过旁列用量窗口显示，余额不足会影响路由。此界面差异未标成“完全一致”。
 
-内置的账户页面、密钥管理网址和 maker 目录可以通过 Magpie 自身的提供商设置补充，无需写入或复制密钥：
-
-```sh
-magpie provider set deepseek-files catalog=deepseek website=https://platform.deepseek.com keys=https://platform.deepseek.com/api_keys
-```
+内置提供商的账户页面和密钥管理按钮也属于宿主元数据：当前插件提供商接口不传递 `website` / `keysUrl`。实际验证中 `provider set` 接受这些参数，但会清理插件记录中的这两个字段，不能靠此命令补出按钮。可直接访问 [DeepSeek 账户页面](https://platform.deepseek.com) 和 [API key 管理](https://platform.deepseek.com/api_keys)。maker 价格目录由插件自行读取已验证与内置一致，不依赖该命令。
 
 DeepSeek 自身的限制仍适用：Pro 不接收图片；Responses 为无状态 API，`previous_response_id` 不提供服务器端会话存储；文件引用不扩展 token 窗口。官方直接 API 的 FIM 不是 Magpie 网关公开的客户端端点，此处没有把它冒称为网关能力。
 
@@ -56,6 +52,8 @@ node scripts/parity.mjs --gateway http://127.0.0.1:3425 --providers deepseek-fil
 实时测试消耗正常 API 用量。对照测试要求内置提供商可用；脚本不会自行启停提供商。`--filter "roundtrip"` 可只运行一类用例。摘要写入 Git 忽略的 `validation/parity.json`，真实失败会使进程非零退出，内置基线的失败也会保留。
 
 此次源代码核查涉及 Magpie 的 `internal/provider/presets.go`、`plugins.go`、`plugin_usage.go`、`plugin_accounts.go`、`balance.go`、`modelprefs.go`、`internal/gateway/deepseek_schema.go`、`chat.go`、`responses.go`、`search.go`、`gateway.go`、`internal/plugin/host.js` 和 `internal/appdir/appdir.go`。
+
+本次离线测试 35 项通过；隔离 Magpie 0.1.1275 对照中，插件侧 35 项通过，内置侧 33 项通过、1 项大图用例不适用、1 项前缀 beta 地址错误。实际运行的桌面网关中，插件侧另有 34 项全部通过，包括 54.6 MB 大图请求。手工模型 ID 还单独验证了连续两次原生刷新后依然可调用。内置侧的已知失败保留在测试记录中，没有计为通过。
 
 官方依据：
 
