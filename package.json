@@ -1,6 +1,6 @@
 {
   "name": "magpie-deepseek-files",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Native Magpie provider plugin: lossless DeepSeek image uploads and cached file references.",
   "type": "module",
   "main": "./index.mjs",
@@ -10,11 +10,12 @@
     "src/",
     "README.md",
     "LICENSE",
-    "assets/"
+    "assets/",
+    "docs/"
   ],
   "scripts": {
     "test": "node --test test/bridge.test.mjs",
-    "check": "node --check index.mjs && node --check src/bridge.mjs && node --check src/cache.mjs && node --check src/paths.mjs && node --check src/models.mjs",
+    "check": "node --check index.mjs && node --check src/bridge.mjs && node --check src/cache.mjs && node --check src/paths.mjs && node --check src/models.mjs && node --check src/catalog.mjs && node --check src/compat.mjs",
     "smoke": "node scripts/smoke.mjs"
   },
   "engines": {

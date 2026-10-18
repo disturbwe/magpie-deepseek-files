@@ -1,4 +1,5 @@
 import { FileCache, Semaphore, sha256 } from "./cache.mjs";
+import { fitDeepSeekRequest } from "./compat.mjs";
 
 export const API = "https://api.deepseek.com";
 export const MIB = 1024 * 1024;
@@ -108,8 +109,9 @@ export function createBridge({ getAuth, cacheDir, fetchImpl = globalThis.fetch, 
     let body;
     try { body = JSON.parse(original); } catch { throw new BridgeError("Expected a JSON request body.", 400); }
     if (!body || typeof body !== "object" || Array.isArray(body)) throw new BridgeError("Expected a JSON object.", 400);
+    const fitted = fitDeepSeekRequest(body, path);
     const images = imageParts(body, path).map(item => ({ ...item, image: decodeImage(item.url) })).filter(item => item.image);
-    if (!images.length) return { payload: original, digests: [], scope: null };
+    if (!images.length) return { payload: fitted ? JSON.stringify(body) : original, digests: [], scope: null };
     const scope = sha256(`${API}\0${key}`);
     const unique = [...new Map(images.map(item => [item.image.digest, item.image])).values()];
     const group = new AbortController();

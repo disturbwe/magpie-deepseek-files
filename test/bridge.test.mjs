@@ -1,13 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createBridge, MIB } from "../src/bridge.mjs";
 import { FileCache, sha256 } from "../src/cache.mjs";
 import { DeepSeekFilesPlugin } from "../index.mjs";
-import { importMagpieKey } from "../src/paths.mjs";
+import { importMagpieKey, manualModelIDs } from "../src/paths.mjs";
 import { discoverModels, readBalance } from "../src/models.mjs";
+import { unicodeNullEscape } from "../src/compat.mjs";
+import { readMakerCatalog, nativeCatalog } from "../src/catalog.mjs";
 
 const URL = "https://api.deepseek.com/v1/responses";
 const url = bytes => `data:image/png;base64,${Buffer.from(bytes).toString("base64")}`;
@@ -229,12 +231,12 @@ test("entry exports exactly one callable plugin for Magpie's loader", async () =
 
 const discoveryProvider = () => ({ id: "deepseek-files", api: "https://api.deepseek.com/v1", npm: "@ai-sdk/openai",
   models: { removed: { name: "Old model" }, "deepseek-flash": { limit: { context: 1000000 }, cost: { input: 0.3, output: 1.2 } } } });
-const discoveryAuth = { auth: { type: "api", key: "private-discovery-key" } };
+const discoveryAuth = { auth: { type: "api", key: "private-discovery-key" }, catalog: {} };
 
 test("model hook lists every official ID, removes disappeared IDs and maps exact metadata", async () => {
   const hooks = await DeepSeekFilesPlugin();
   assert.equal(hooks.provider.id, "deepseek-files");
-  assert.equal(hooks.provider.models, discoverModels);
+  assert.equal(typeof hooks.provider.models, "function");
   const models = await discoverModels(discoveryProvider(), discoveryAuth, async (url, init) => {
     assert.equal(url, "https://api.deepseek.com/models");
     assert.equal(init.headers.authorization, "Bearer private-discovery-key");
@@ -278,7 +280,7 @@ test("discovery failures are explicit, sanitized, and do not mutate existing met
     await assert.rejects(discoverModels(provider, discoveryAuth, async () => new Response("private-discovery-key", { status })), error => {
       assert.ok(error.message.includes(String(status)));
       assert.equal(error.message.includes("private-discovery-key"), false);
-      assert.equal(error.signIn, [401, 403].includes(status) ? "expired" : undefined);
+      assert.equal(error.signIn, status === 401 ? "expired" : undefined);
       return true;
     });
     assert.deepEqual(provider, before);
@@ -310,4 +312,125 @@ test("usage hook reads the account's official multi-currency balance, including 
   assert.deepEqual(result, { balance: "¥12.30 · $0.00", signIn: "kept" });
   await assert.rejects(readBalance(async () => discoveryAuth.auth, async () => Response.json({ balance_infos: [{ currency: "CNY", total_balance: "NaN" }] })), /invalid/);
   await assert.rejects(readBalance(async () => null), /Sign in/);
+});
+
+test("native DeepSeek schema corrections cover nested schemas without editing examples or tool arguments", async t => {
+  const s = await setup(t);
+  const source = { model: "deepseek-flash", tools: [{ type: "function", name: "validate", parameters: {
+    type: "object", properties: { value: { type: "string", pattern: String.raw`^[^\0]+$`, default: { pattern: String.raw`\0` } } },
+    $defs: { nested: { allOf: [{ items: { pattern: String.raw`\0` } }] } },
+  } }], input: [{ type: "function_call", call_id: "c1", name: "validate", arguments: JSON.stringify({ pattern: String.raw`\0` }) },
+    { type: "function_call_output", call_id: "c1", output: "unchanged" }] };
+  await request(s.fetch, JSON.stringify(source));
+  const sent = JSON.parse(s.inference()[0].init.body);
+  assert.equal(sent.tools[0].parameters.properties.value.pattern, String.raw`^[^\u0000]+$`);
+  assert.equal(sent.tools[0].parameters.$defs.nested.allOf[0].items.pattern, String.raw`\u0000`);
+  assert.deepEqual(sent.input, source.input);
+  assert.equal(sent.tools[0].parameters.properties.value.default.pattern, String.raw`\0`);
+  assert.equal(unicodeNullEscape(String.raw`\\0 \012 \09 \0x`), String.raw`\\0 \012 \09 \u0000x`);
+});
+
+test("Chat max_completion_tokens and none thinking match DeepSeek's native fields", async t => {
+  const s = await setup(t);
+  await s.fetch("https://api.deepseek.com/v1/chat/completions", { method: "POST", body: JSON.stringify({ model: "deepseek-flash", messages: [{ role: "user", content: "hello" }], max_completion_tokens: 17, reasoning_effort: "none" }) });
+  const sent = JSON.parse(s.inference()[0].init.body);
+  assert.equal(sent.max_tokens, 17);
+  assert.equal(sent.max_completion_tokens, undefined);
+  assert.deepEqual(sent.thinking, { type: "disabled" });
+  assert.equal(sent.reasoning_effort, undefined);
+  const explicit = '{"messages":[],"max_tokens":9,"max_completion_tokens":12,"thinking":{"type":"enabled"},"reasoning_effort":"none"}';
+  await s.fetch("https://api.deepseek.com/v1/chat/completions", { method: "POST", body: explicit });
+  assert.equal(s.inference()[1].init.body, explicit);
+});
+
+test("native search is declared, and normal upstream failures keep status, headers and body", async t => {
+  const config = {};
+  await (await DeepSeekFilesPlugin()).config(config);
+  assert.equal(config.provider["deepseek-files"].searches, true);
+  for (const status of [401, 402, 403, 429, 500, 503]) {
+    const upstream = Response.json({ error: { message: "original refusal" } }, { status, headers: { "retry-after": "42", "x-request-id": "request-123" } });
+    const s = await setup(t, () => upstream);
+    const got = await request(s.fetch, '{"input":"hello"}');
+    assert.equal(got, upstream);
+    assert.equal(got.headers.get("retry-after"), "42");
+    assert.equal(got.headers.get("x-request-id"), "request-123");
+    assert.equal(s.inference().length, 1);
+    assert.equal(s.uploads().length, 0);
+  }
+});
+
+test("maker catalog changes update prices, while unknown models do not borrow another model's price", async t => {
+  const s = await setup(t), filename = join(s.directory, "models.json");
+  await writeFile(filename, JSON.stringify({ deepseek: { models: { flash: { cost: { input: 0.15, output: 0.6 } } } } }));
+  assert.equal((await readMakerCatalog(filename)).flash.cost.input, 0.15);
+  await writeFile(filename, JSON.stringify({ deepseek: { models: { flash: { cost: { input: 1.234, output: 5.678 } } } } }));
+  assert.equal((await readMakerCatalog(filename)).flash.cost.input, 1.234);
+  await writeFile(filename, "broken catalog");
+  assert.deepEqual(await readMakerCatalog(filename), {});
+  const models = await discoverModels(discoveryProvider(), { ...discoveryAuth, catalog: { "deepseek-flash": { cost: { input: 0.15, output: 0.6, cache_read: 0.003 } } } },
+    async () => Response.json({ data: [{ id: "deepseek-flash" }, { id: "new-unknown" }] }));
+  assert.deepEqual(models["deepseek-flash"].cost, { input: 0.15, output: 0.6, cache: { read: 0.003, write: 0 } });
+  assert.equal(models["new-unknown"].cost, undefined);
+});
+
+test("balance order is stable, positive currencies first, and grant/top-up details do not affect routing", async () => {
+  const balances = [{ currency: "USD", total_balance: "20", granted_balance: "5", topped_up_balance: "15" }, { currency: "CNY", total_balance: "-1" }];
+  const read = list => readBalance(async () => discoveryAuth.auth, async () => Response.json({ is_available: true, balance_infos: list }));
+  const first = await read(balances), second = await read(balances.toReversed ? balances.toReversed() : [...balances].reverse());
+  assert.deepEqual(first, second);
+  assert.equal(first.balance, "$20.00 · ¥-1.00");
+  assert.equal(first.windows[0].aside, true);
+  assert.equal(first.windows[0].display, "Granted $5.00 · Topped up $15.00");
+  assert.ok(first.windows.every(w => w.used < 100));
+});
+
+test("a genuinely exhausted balance is a routing quota, not an expired API key", async () => {
+  const result = await readBalance(async () => discoveryAuth.auth, async () => Response.json({ is_available: false, balance_infos: [{ currency: "CNY", total_balance: "0" }] }));
+  assert.equal(result.signIn, "kept");
+  assert.equal(result.windows.at(-1).used, 100);
+  assert.equal(result.windows.at(-1).aside, undefined);
+});
+
+test("usage RPC communicates invalid credentials explicitly but does not misclassify outages", async () => {
+  for (const status of [401, 403, 429, 500]) {
+    const result = await readBalance(async () => discoveryAuth.auth, async () => new Response("private-discovery-key", { status }));
+    assert.equal(result.signIn, status === 401 ? "expired" : undefined);
+    assert.ok(result.error.includes(String(status)));
+    assert.equal(JSON.stringify(result).includes("private-discovery-key"), false);
+  }
+  const outage = await readBalance(async () => discoveryAuth.auth, () => { throw new Error("private-discovery-key"); });
+  assert.equal(outage.signIn, undefined);
+  assert.ok(outage.error.includes("could not be reached"));
+});
+
+test("portable Magpie uses the directory passed by its host for auth import and catalog", async t => {
+  const s = await setup(t);
+  await writeFile(join(s.directory, "providers.json"), JSON.stringify({ providers: [{ id: "deepseek", key: "portable-key", anthropic: "https://api.deepseek.com/anthropic" }] }));
+  const hooks = await DeepSeekFilesPlugin({ magpie: {}, directory: s.directory });
+  const login = await hooks.auth.methods[1].authorize();
+  assert.equal((await login.callback()).key, "portable-key");
+  await mkdir(join(s.directory, "cache"));
+  await writeFile(join(s.directory, "cache", "models.json"), JSON.stringify({ deepseek: { models: { "deepseek-flash": { cost: { input: 7, output: 8 } } } } }));
+  assert.equal((await nativeCatalog(s.directory))["deepseek-flash"].cost.input, 7);
+  const config = {};
+  await hooks.config(config);
+  assert.equal(config.provider["deepseek-files"].models["deepseek-flash"].cost.input, 7);
+  await writeFile(join(s.directory, "providers.json"), JSON.stringify({ providers: [{ id: "deepseek", key: "portable-key", chat: "https://api.deepseek.com/v1", anthropic: "https://thirdparty.example/anthropic" }] }));
+  await assert.rejects(importMagpieKey(s.directory), /official/);
+});
+
+test("explicit manual model IDs survive discovery, while withdrawn fetched IDs are not resurrected", async t => {
+  const s = await setup(t);
+  await writeFile(join(s.directory, "providers.json"), JSON.stringify({ providers: [{ id: "deepseek-files", models: ["removed-official", "manual-alias"], pickedFrom: ["removed-official"] }] }));
+  assert.deepEqual(await manualModelIDs(s.directory, "deepseek-files"), ["manual-alias"]);
+  await writeFile(join(s.directory, "providers.json"), JSON.stringify({ providers: [{ id: "deepseek-files", models: ["manual-alias"], pickedFrom: ["manual-alias"] }] }));
+  assert.deepEqual(await manualModelIDs(s.directory, "deepseek-files"), ["manual-alias"], "a full refresh must not forget an explicit manual model");
+  const provider = discoveryProvider();
+  provider.models["manual-alias"] = { name: "Manual", capabilities: { reasoning: true }, variants: { low: {} }, limit: { context: 123456 } };
+  const models = await discoverModels(provider, { ...discoveryAuth, manualModels: { "manual-alias": {} } }, async () => Response.json({ data: [{ id: "deepseek-flash" }] }));
+  assert.deepEqual(Object.keys(models), ["deepseek-flash", "manual-alias"]);
+  assert.equal(models["manual-alias"].api.id, "manual-alias");
+  assert.equal(models["manual-alias"].limit.context, 123456);
+  await writeFile(join(s.directory, "providers.json"), JSON.stringify({ providers: [{ id: "deepseek-files", models: [], pickedFrom: ["manual-alias"] }] }));
+  assert.deepEqual(await manualModelIDs(s.directory, "deepseek-files"), []);
 });
