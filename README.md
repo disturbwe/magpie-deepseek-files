@@ -123,7 +123,10 @@ npm run check
 ```sh
 node scripts/image-budget-smoke.mjs --rollout /path/to/local-rollout.jsonl
 node scripts/image-budget-smoke.mjs --rollout /path/to/local-rollout.jsonl --live
+node scripts/gateway-budget-smoke.mjs
 ```
+
+0.4.0 实测：出错会话的 162 次图片引用共 **294,482,467 字节 → 189,887,051 字节**，全部图片保留，124 张像素不变，38 张历史图缩小；官方推理返回 HTTP 200。首次准备在本机约 90 秒，后续复用文件和变换大小元数据。经运行中的 Magpie 0.1.1282 发送 601 张小图也返回 HTTP 200，验证最新 600 张的裁剪路径；SSE 透传同时通过。Node / Bun 的 44 项离线测试以及 GitHub Windows/Linux CI 均通过。
 
 真实接口测试是**手动选择运行**的，会使用现有官方 API key 并产生正常 API 用量：
 

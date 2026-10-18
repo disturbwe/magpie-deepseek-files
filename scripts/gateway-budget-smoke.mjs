@@ -1,0 +1,21 @@
+// Opt-in real gateway test: 601 tiny images must be reduced to 600 by the plugin.
+import sharp from "sharp";
+import { mkdir, writeFile } from "node:fs/promises";
+const raw = await sharp({ create: { width: 8, height: 8, channels: 3, background: "#88aaff" } }).png().toBuffer();
+const content = [{ type: "input_text", text: "Transport test: reply only COUNT_BUDGET_OK." }, ...Array.from({ length: 601 }, () => ({ type: "input_image", image_url: `data:image/png;base64,${raw.toString("base64")}` }))];
+const base = "http://127.0.0.1:3425/v1/responses";
+const headers = { authorization: "Bearer magpie", "content-type": "application/json" };
+const start = Date.now();
+console.log(JSON.stringify({ event: "gateway_count_start", images: 601 }));
+const response = await fetch(base, { method: "POST", headers, body: JSON.stringify({ model: "deepseek-files/deepseek-flash", input: [{ role: "user", content }], reasoning: { effort: "none" }, max_output_tokens: 48 }), signal: AbortSignal.timeout(120000) });
+const data = await response.json();
+const answer = (data.output ?? []).flatMap(x => x.content ?? []).map(x => x.text ?? "").join("");
+const result = { count: { inputImages: 601, status: response.status, success: response.ok && answer.includes("COUNT_BUDGET_OK"), usage: data.usage }, elapsedMs: Date.now() - start };
+if (!result.count.success) result.count.error = data.error?.message ?? "No diagnostic answer";
+const stream = await fetch(base, { method: "POST", headers, body: JSON.stringify({ model: "deepseek-files/deepseek-flash", input: "Reply only STREAM_BUDGET_OK.", reasoning: { effort: "none" }, max_output_tokens: 48, stream: true }), signal: AbortSignal.timeout(60000) });
+const events = await stream.text();
+result.streaming = { status: stream.status, success: stream.ok && events.includes("response.completed") && events.includes("STREAM_BUDGET_OK") };
+await mkdir("validation", { recursive: true });
+await writeFile("validation/gateway-image-budget.json", JSON.stringify(result, null, 2) + "\n");
+console.log(JSON.stringify(result));
+if (!result.count.success || !result.streaming.success) process.exitCode = 1;
