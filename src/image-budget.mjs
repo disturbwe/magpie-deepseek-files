@@ -31,7 +31,7 @@ const encode = (image, profile, signal) => encoders.run(() => encodeOne(image, p
 
 // Budget every occurrence, including repeated references. Cache identity includes
 // the source and transform profile; only uploaded ID/expiry/size persist on disk.
-export async function planImages(images, { budget = IMAGE_BUDGET, cacheGet, cachePut, signal, onMetric = () => {} } = {}) {
+export async function planImages(images, { budget = IMAGE_BUDGET, cacheGet, cachePut, transformCache, signal, onMetric = () => {} } = {}) {
   if (!Number.isSafeInteger(budget) || budget <= 0) throw new Error("Invalid image budget");
   const originalBytes = images.reduce((sum, item) => sum + item.image.raw.length, 0);
   let bytes = originalBytes;
@@ -43,9 +43,12 @@ export async function planImages(images, { budget = IMAGE_BUDGET, cacheGet, cach
     const digest = sha256(`image-budget-v4\0${profile.name}\0${source.digest}`);
     if (variants.has(digest)) return variants.get(digest);
     const pending = (async () => {
+      const encodedHit = transformCache?.get(digest);
+      if (encodedHit) return { digest, bytes: encodedHit.raw.length, ...encodedHit };
       const stored = await cacheGet?.(digest);
       if (stored && Number.isSafeInteger(stored.bytes) && stored.bytes > 0) return { digest, bytes: stored.bytes, materialize: (uploadSignal = signal) => encode(source, profile, uploadSignal) };
       const encoded = await encode(source, profile, signal);
+      if (encoded) transformCache?.set(digest, encoded);
       if (encoded) await cachePut?.(digest, encoded.raw.length);
       return encoded && { digest, bytes: encoded.raw.length, ...encoded };
     })();

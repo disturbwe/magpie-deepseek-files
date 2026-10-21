@@ -26,4 +26,4 @@ jobs:
         with:
           bun-version: latest
       - run: bun install
-      - run: bun test test/bridge.test.mjs test/image-budget.test.mjs
+      - run: bun test test/bridge.test.mjs test/image-budget.test.mjs test/opencode-inline.test.mjs
