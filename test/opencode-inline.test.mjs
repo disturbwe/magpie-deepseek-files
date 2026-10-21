@@ -17,8 +17,19 @@ test('hook targets built-in Go DeepSeek only, preserving client controls and sou
  const original=structuredClone(b);
  const result=await onRequest(b,{model:b.model,protocol:'chat'});
  assert.deepEqual(result,original);assert.deepEqual(b,original);
- for(const model of ['opencode-go/claude-haiku-5-5','deepseek/deepseek-flash','group/test','opencode-go-deepseek/deepseek-v4.1-flash'])
+ for(const model of ['opencode-go/claude-haiku-5-5','deepseek/deepseek-flash','codex/gpt-6-astra','opencode-go-deepseek/deepseek-v4.1-flash'])
   assert.equal(await onRequest(b,{model,protocol:'chat'}),undefined);
+});
+
+test('routing groups and automatic aliases are budgeted before selection',async()=>{
+ for(const model of ['group/mixed-vendors','group/outer-nested','group/auto-deepseek-v4-1-flash','auto/deepseek-v4.1-flash']){
+  const b={model,stream:true,messages:[{role:'user',content:Array.from({length:130},()=>image(tiny))}]};
+  const result=await onRequest(b,{model,protocol:'chat'});
+  assert.equal(result.model,model);assert.equal(result.stream,true);
+  assert.equal(result.messages[0].content.filter(p=>p.type==='image_url').length,128);
+  assert.match(result.messages[0].content[0].text,/original retained/);
+  assert.equal(b.messages[0].content.filter(p=>p.type==='image_url').length,130);
+ }
 });
 
 test('hook handles native Responses tool images without changing call pairing',async()=>{

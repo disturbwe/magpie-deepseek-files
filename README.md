@@ -30,7 +30,7 @@ deepseek-files/deepseek-flash
 
 **只有选择这个提供商才会启用文件适配。** 继续选择 `deepseek/deepseek-flash`，或路由组中仍指向原提供商的成员，仍使用原来的发送路径。需要时将相应组成员改成 `deepseek-files/deepseek-flash`。
 
-## 内置 OpenCode Go DeepSeek 图片压缩（0.5.0）
+## 内置 OpenCode Go DeepSeek 与路由组图片压缩（0.5.1）
 
 插件在 Magpie 网关路由前压缩图片，直接使用内置 `opencode-go/deepseek-v4.1-flash`；不新增 Go 供应商，不接管登录、模型目录、路由或上游传输。原有官方 `deepseek-files` 文件适配保持不变。
 
@@ -42,7 +42,7 @@ magpie plugin options magpie-deepseek-files '{"gatewayTimeoutMs":10000}'
 
 然后在内置 OpenCode Go 中选择 DeepSeek。无需额外登录；key、订阅计费和流式传输均由 Magpie 原生入口负责。
 
-只处理明确指定 `opencode-go/deepseek…` 的请求，支持 Chat、Responses、Anthropic 和 Gemini 图片内容，包含 Responses 和 Anthropic 工具结果中的图片。路由组在钩子执行时尚未决定供应商，因此组请求不应用此保护；其他供应商和 Go 非 DeepSeek 模型不受影响。
+处理明确指定 `opencode-go/deepseek…` 的请求，以及所有 `group/…` 路由组和 `auto/…` 自动组请求。支持 Chat、Responses、Anthropic 和 Gemini 图片内容，包含 Responses 和 Anthropic 工具结果中的图片。组请求在路由前统一执行预算，因此嵌套组、通配符成员、动态规则及故障切换均不依赖插件自行解析路由配置。**混合组最终选到其他模型时，也会收到预算处理后的图片**；直接选择其他供应商或 Go 非 DeepSeek 模型不受影响。插件不修改组成员、优先级、故障切换规则或请求中的模型名；基于图片数量等内容的路由规则会看到预算处理后的内容。
 
 默认图片原始字节总预算 8 MiB、128 张引用，完整 JSON 预算 16 MiB；这些是插件策略，并非 Go 官方限制。先无损压缩，再优先缩小历史图片，最近四张最后处理；仍不够时将最旧图片替换为明确文字提示。本地历史不修改，工具定义、调用配对、模型和流式参数保持。变换只在内存中缓存，最多 32 MiB，不上传至第三方，也不使用官方 DeepSeek file_id。
 
