@@ -40,6 +40,8 @@ test('hook handles Anthropic tool-result and Gemini inline images',async()=>{
  assert.equal(g.contents[0].parts.filter(p=>p.inlineData).length,128);
  assert.match(g.contents[0].parts[0].text,/original retained/);
  assert.equal(g.contents[0].parts[0].type,undefined);
+ const snake={contents:[{role:'user',parts:[{inline_data:{mime_type:'image/png',data:tiny.toString('base64')}}]}]};
+ assert.deepEqual(await onRequest(snake,{model,protocol:'gemini'}),snake);
 });
 
 test('hook lets host roll back processing errors and observes cancellation',async()=>{
@@ -78,4 +80,3 @@ test('text/tool overhead reduces image allowance before dropping any history',as
  const b=body([image(raw),image(raw)]);b.messages[0].content[0].text='x'.repeat(350000);
  const r=await prepareInlineRequest(JSON.stringify(b),'/chat/completions',{imageBudget:400000,requestBudget:500000});assert.ok(Buffer.byteLength(r.payload)<=500000);assert.equal(r.omitted,0);assert.equal(JSON.parse(r.payload).messages[0].content[0].text,b.messages[0].content[0].text);
 });
-
